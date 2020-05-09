@@ -9,21 +9,28 @@ import com.vividsolutions.jts.geom.GeometryFactory;
 import com.vividsolutions.jts.geom.Point;
 import org.geotools.geojson.geom.GeometryJSON;
 
+import java.awt.geom.Point2D;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.StringReader;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.math.BigDecimal;
+import java.util.*;
 
 
 public class GeohashPolyUtil {
 
     private static final char[] base32 = new char[]{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'j', 'k', 'm', 'n', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'};
-    private static final int MAX_GEOAHSH_NUM=9;
+    private static final int MAX_GEOAHSH_NUM = 9;
 
-    public boolean isPtInPoly(GeoHash geohash, Geometry geometry, Mode mode) {
+    /**
+     * 判断围栏是否包含geohash块或者相交
+     *
+     * @param geohash
+     * @param geometry
+     * @param mode
+     * @return
+     */
+    private boolean isPtInPoly(GeoHash geohash, Geometry geometry, Mode mode) {
 
         if (mode.equals(Mode.INTERSECT)) {
             return geometry.intersects(toJTSPolygon(geohash));
@@ -33,12 +40,16 @@ public class GeohashPolyUtil {
         return false;
     }
 
-    public boolean isPtInPoly(GeoHash geohash, Geometry geometry) {
+    private boolean isPtInPoly(GeoHash geohash, Geometry geometry) {
 
         return geometry.intersects(toJTSPolygon(geohash));
     }
 
-    public Geometry toJTSPolygon(GeoHash geohash) {
+    /**
+     * @param geohash
+     * @return
+     */
+    private Geometry toJTSPolygon(GeoHash geohash) {
 
         BoundingBox boundingBox = geohash.getBoundingBox();
 
@@ -214,24 +225,42 @@ public class GeohashPolyUtil {
         return set;
     }
 
-    public Set<String> findPolygonGeohashList(Geometry geometry, int numberOfCharacters, Mode mode) {
-        Set<String> polygonGeohash = findPolygonGeohash(geometry, numberOfCharacters);
-        Set<String> result= new HashSet<String>();
-        if (mode.equals(Mode.INTERSECT)) {
-            result=polygonGeohash;
-        } else if (mode.equals(Mode.INSIDE)) {
-            Set<String> tmpSet = new HashSet<String>();
-            polygonGeohash.forEach(geohashstr -> {
-                if (isPtInPoly(GeoHash.fromGeohashString(geohashstr), geometry, mode)) {
-                    tmpSet.add(geohashstr);
-                }
-            });
-            result = tmpSet;
-        }
+    public Set<String> findPolygonGeohashSet(Geometry geometry, int numberOfCharacters, Mode mode) {
+        Map<Integer, Set<String>> polygonGeohashMap = findPolygonGeohashMap(geometry, numberOfCharacters, mode);
+
+        Set<String> result = new HashSet<>();
+        polygonGeohashMap.forEach((k, v) -> {
+
+            if (k == numberOfCharacters) {
+                result.addAll(v);
+            }
+            if (k > numberOfCharacters) {
+                v.forEach(geohash -> {
+                    result.add(geohash.substring(0, numberOfCharacters));
+                });
+            }
+            if (k < numberOfCharacters) {
+
+                int j=k;
+                do{
+                    Set<String> tmpSet = new HashSet<>();
+                    v.forEach(geohashStr -> {
+                        for (int i=0;i<base32.length;i++){
+                            tmpSet.add(geohashStr+base32[i]);
+                        }
+                    });
+                    v=tmpSet;
+                    j++;
+                }while(j < numberOfCharacters);
+
+                result.addAll(v);
+            }
+        });
+
         return result;
     }
 
-    public Set<String> findPolygonGeohashList(Geometry geometry, Mode mode) {
+    public Map<Integer, Set<String>> findPolygonGeohashMap(Geometry geometry, int maxGeohashNum, Mode mode) {
         int numberOfCharacters = 1;
         boolean flag = true;
         Set<String> polygonGeohash = new HashSet<String>();
@@ -239,7 +268,7 @@ public class GeohashPolyUtil {
             //先从geohash2位开始找
             polygonGeohash = findPolygonGeohash(geometry, ++numberOfCharacters);
             //geohash 的数量大于50或者geohash的位数大于等于9 不在增加geohash的位数
-            if (polygonGeohash.size() > 50 || numberOfCharacters >= MAX_GEOAHSH_NUM) {
+            if (polygonGeohash.size() > 50 || numberOfCharacters >= maxGeohashNum) {
                 flag = false;
             }
         }
@@ -257,14 +286,8 @@ public class GeohashPolyUtil {
         }
 
         Set<String> result = mergeGeohash(geohashInside);
-
-        //存储所有的geohash值 用于合饼后判断geohash的总数量是大于500
-        Set<String> mergeAllGeohash = new HashSet<>();
-        mergeAllGeohash.addAll(result);
-        mergeAllGeohash.addAll(geohashIntersect);
-        mergeGeohash(mergeAllGeohash);
-        //与围栏相交的geohash值增加geohash的位数 查找更细 直到geohash的数量大于500或者geohash的位数达到9位
-        while (mergeAllGeohash.size() <= 500 && numberOfCharacters < MAX_GEOAHSH_NUM) {
+        //与围栏相交的geohash值增加geohash的位数 查找更细 直到geohash的位数达到num
+        while (numberOfCharacters < maxGeohashNum) {
             numberOfCharacters++;
             Set<String> geohashSetTmp = new HashSet<String>();
             for (String geohashStr : geohashIntersect) {
@@ -278,39 +301,76 @@ public class GeohashPolyUtil {
                 }
             }
             geohashIntersect = geohashSetTmp;
-            mergeAllGeohash.clear();
-            mergeAllGeohash.addAll(result);
-            mergeAllGeohash.addAll(geohashIntersect);
-            mergeGeohash(mergeAllGeohash);
         }
 
         if (mode.equals(Mode.INTERSECT)) {
             result.addAll(geohashIntersect);
         }
-        return mergeGeohash(result);
+
+        Set<String> mergeResult = mergeGeohash(result);
+
+        Map<Integer, Set<String>> map = new HashMap<>();
+        mergeResult.forEach(str -> {
+            int length = str.length();
+            if (map.containsKey(length)) {
+                map.get(length).add(str);
+            } else {
+                Set<String> set = new HashSet<>();
+                set.add(str);
+                map.put(length, set);
+            }
+        });
+        return map;
     }
 
     public Geometry jsonToWkt(String geoJson) {
-        String wkt = null;
+//        String wkt = null;
         GeometryJSON gjson = new GeometryJSON();
         Reader reader = new StringReader(geoJson);
         Geometry geometry = null;
         try {
             geometry = gjson.read(reader);
-            wkt = geometry.toText();
-
-        } catch (IOException e) {
+//            wkt = geometry.toText();
+        } catch (Exception e) {
             e.printStackTrace();
         }
         return geometry;
     }
 
-    /**
-     * 获取围栏面积
-     * @param geometry
-     * @return
-     */
-    public double getArea(Geometry geometry){
-        return  geometry.getArea();
+    public double getArea(Geometry geometry) {
+        List<Point2D.Double> list = new ArrayList<>();
+        Coordinate[] coordinates = geometry.getCoordinates();
+        Arrays.stream(coordinates).forEach(coordinate -> {
+            list.add(new Point2D.Double(coordinate.x, coordinate.y));
+        });
+        return getArea(list).doubleValue();
     }
+
+    private BigDecimal getArea(List<Point2D.Double> ring) {
+        double sJ = 6378245.0;
+        double Hq = 0.017453292519943295;
+        double c = sJ * Hq;
+        double d = 0;
+
+        if (3 > ring.size()) {
+            return new BigDecimal(0);
+        }
+
+        for (int i = 0; i < ring.size() - 1; i++) {
+            Point2D.Double h = ring.get(i);
+            Point2D.Double k = ring.get(i + 1);
+            double u = h.x * c * Math.cos(h.y * Hq);
+            double hhh = h.y * c;
+            double v = k.x * c * Math.cos(k.y * Hq);
+            d = d + (u * k.y * c - v * hhh);
+        }
+        Point2D.Double g1 = ring.get(ring.size() - 1);
+        Point2D.Double point = ring.get(0);
+        double eee = g1.x * c * Math.cos(g1.y * Hq);
+        double g2 = g1.y * c;
+        double k = point.x * c * Math.cos(point.y * Hq);
+        d += eee * point.y * c - k * g2;
+        return new BigDecimal(0.5 * Math.abs(d)).divide(new BigDecimal(1));
+    }
+
 }
