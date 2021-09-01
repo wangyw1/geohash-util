@@ -1,11 +1,6 @@
 package com.jiguang.izone.test;
 
-import com.jiguang.izone.model.Mode;
 import com.jiguang.izone.util.CustomGrid;
-import com.jiguang.izone.util.GeohashPolyUtil;
-import com.vividsolutions.jts.geom.Geometry;
-
-import java.util.Set;
 
 public class Test1 {
     public static void main(String[] args) {
